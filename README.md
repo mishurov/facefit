@@ -1,8 +1,8 @@
-# Nuke connector for ARCores's TensorFlow Lite model
+# Nuke connector for ARCore's TensorFlow Lite model
 
 A binary plug-in for Nuke.
 
-It creates a geometry of a face from a single image. I use C++ TensorFlow API for evaluating the model and Dlib for basic image processing for moving data back and forth between TensorFlow and Nuke.
+It adjusts locations of points of a generic face mesh based on a single input image. I use C++ TensorFlow Lite API for evaluating the model and Dlib for basic image processing for moving data back and forth between TensorFlow and Nuke.
 
 ### Notes on installation
 Change paths to the data, if needed, in constants in ```src/facefit.h```, I suppose that the resulting binary looks for the files from Nuke's executable directory.
