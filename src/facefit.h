@@ -18,7 +18,7 @@
 #define FACEFIT_H_
 
 #include "nuke2tf.h"
-#include "prnet.h"
+#include "tflite_mesh.h"
 #include <DDImage/Iop.h>
 #include <DDImage/SourceGeo.h>
 
@@ -27,29 +27,25 @@ namespace facefit {
 
 // path to the directory with model and vertex data,
 // relative to Nuke's executable, I guess
-static const std::string kDataPath = "../Documents/projects/facefit/data";
+static const std::string kDataPath = "../Documents/projects/facefit/data/";
 
-// TensorFlow model name
-static const std::string kModelName = "256_256_resfcn256_weight";
 // Paths to the actual files
-static const std::string kMetaGraphPath =
-				kDataPath + "/net-data/" + kModelName + ".meta";
-static const std::string kCheckpointPath =
-				kDataPath + "/net-data/" + kModelName;
-static const std::string kDetectorModelPath =
-			kDataPath + "/net-data/mmod_human_face_detector.dat";
-static const std::string kFaceIndicesPath =
-				kDataPath + "/uv-data/face_ind.txt";
-static const std::string kKptIndicesPath =
-				kDataPath + "/uv-data/uv_kpt_ind.txt";
-static const std::string kTrianglesPath =
-				kDataPath + "/uv-data/triangles.txt";
+static const std::string kFaceObjPath = kDataPath + "face_model_468.obj";
+// there're two models acceptiong different resultions, both work
+static const int kInputResolution = 192;
+static const std::string kModelPath =
+	kDataPath + "facemesh-lite_nocrawl-2019_01_14-v0.tflite";
+//static const int kInputResolution = 128;
+//static const std::string kModelPath =
+//	kDataPath + "facemesh-ultralite_nocrawl-2018_12_21-v0.tflite";
+
 
 static const char* kFaceFitClass = "FaceFit";
-static const int kPRNetResolution = 256;
+static const int kOutPointsNum = 468;
 
 
 using namespace DD::Image;
+
 
 class FaceFitOp : public SourceGeo {
 public:
@@ -69,24 +65,15 @@ protected:
 	virtual void get_geometry_hash();
 
 private:
-	static thread_local PRNet _net;
+	TFLiteMesh _net;
 	Nuke2TensorFlow _n2tf;
 	PointList _bufferPoints;
 
 	// knobs
-	bool _pointCloud;
 	bool _faceDetector;
 	float _bBox[4];
-	float _pointRadius;
 	float _cf[3];
-	const char* const _outTypeNames[4] =
-			{ "key points", "mesh", "point cloud", 0 };
-	enum _outTypes { kKeyPoints, kMesh, kPointCloud };
-	int _outType;
 	unsigned _updateReqInc;
-
-	int _currentOutType;
-	float _currentPointRadius;
 
 	void infer(bool modify);
 	void recreate_primitives(int obj, GeometryList& out,

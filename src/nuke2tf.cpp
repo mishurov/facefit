@@ -15,13 +15,65 @@
  * ************************************************************************/
 
 #include "nuke2tf.h"
-
 #include <dlib/image_transforms.h>
 #include <fstream>
 #include <cmath>
 
 using namespace dlib;
-using namespace tensorflow;
+
+
+// http://www.codeincodeblock.com/2013/07/modern-opengl3d-model-obj-loaderparser.html
+Nuke2TensorFlow::StaticData::StaticData(const std::string& faceObjPath)
+{
+	std::cout << "Loading the canonical face obj...\n";
+	std::ifstream in(faceObjPath, std::ios::in);
+	if (!in) {
+		std::cerr << "Error opening file " << faceObjPath << "\n";
+		return;
+	}
+	std::string line;
+	std::vector<int> faceUvIs;
+	std::vector<double> unorderedUvs;
+	while (std::getline(in, line)) {
+		if (line.substr(0, 2) == "v ") {
+			std::istringstream v(line.substr(2));
+			double x, y, z;
+			v >> x;
+			v >> y;
+			v >> z;
+			_defaultPoints.push_back(DD::Image::Vector3(x, y ,z));
+		}
+		else if (line.substr(0, 2) == "vt") {
+			std::istringstream v(line.substr(3));
+			double U, V;
+			v >> U;
+			v >> V;
+			unorderedUvs.push_back(U);
+			unorderedUvs.push_back(V);
+		}
+		else if (line.substr(0, 2) == "f ") {
+			std::istringstream v(line.substr(2));
+			for (int i = 0; i < 3; i ++) {
+				int index, uv;
+				v >> index;
+				v.get();
+				v >> uv;
+				_faceIndices.push_back(--index);
+				faceUvIs.push_back(--uv);
+			}
+		}
+	}
+	// It's subpoptimal, because it assigns the same data several times
+	// yet it isn't crucial since the method is called only once
+	_uvs.resize(_defaultPoints.size());
+	for (int i = 0; i < faceUvIs.size(); i++) {
+		int uv = faceUvIs[i];
+		int ci = _faceIndices[i];
+		double U = unorderedUvs[uv * 2];
+		double V = unorderedUvs[uv * 2 + 1];
+		_uvs[ci].set(U, V, 0);
+	}
+}
 
 
 Nuke2TensorFlow::Nuke2TensorFlow(int resolution)
@@ -33,74 +85,8 @@ Nuke2TensorFlow::Nuke2TensorFlow(int resolution)
 		{ 0, _resolution - 1},
 		{ _resolution - 1, 0},
 	};
-	_points.resize(_resolution * _resolution);
 	_planeHeight = 0;
-}
-
-
-Nuke2TensorFlow::StaticData::StaticData(const std::string& detectorModelPath,
-			const std::string& trianglesPath,
-			const std::string& faceIndicesPath,
-			const std::string& kptIndicesPath,
-			int resolution)
-{
-	std::cout << "Loading the detector model...\n";
-	deserialize(detectorModelPath) >> net;
-
-	std::cout << "Loading the indices data...\n";
-	readIndices(faceIndicesPath, _faceIndices);
-	for (int i = 0; i < _faceIndices.size(); i++)
-		_face2all[i] = _faceIndices[i];
-
-	std::vector<int> kptIndices2d;
-	readIndices(kptIndicesPath, kptIndices2d);
-	int size = kptIndices2d.size() / 2;
-	for (int i = 0; i < size; i++) {
-		int x = kptIndices2d.at(i + size);
-		int y = kptIndices2d.at(i);
-		_kptIndices.push_back(x * resolution + y);
-	}
-	readIndices(trianglesPath, _triIndices);
-
-	std::cout << "Generating default points and UVs...\n";
-	int numPoints = resolution * resolution;
-	_uvs.resize(numPoints);
-	_defaultPoints.resize(numPoints);
-
-	for (int i = 0; i < resolution; i++) {
-		for (int j = 0; j < resolution; j++) {
-			int i_flat = i * resolution + j;
-
-			_defaultPoints.at(i_flat).set(i * 2, j * 2, 0);
-
-			_uvs[i_flat] = DD::Image::Vector3(
-				(float)j / (float)resolution,
-				1 - (float)i / (float)resolution,
-				0.0
-			);
-
-		}
-	}
-
-	_endList = { 16, 21, 26, 41, 47, 30, 35, 67 };
-}
-
-
-void Nuke2TensorFlow::StaticData::readIndices(const std::string& path,
-						std::vector<int>& indices)
-{
-	std::fstream ifs;
-	ifs.open(path);
-	if (!ifs) {
-                std::cout << "Error reading indices file.\n";
-                return;
-        }
-	double index;
-	while(ifs >> index) {
-		indices.push_back((int)index);
-	}
-	ifs.clear();
-	ifs.close();
+	_points.resize(data.defaultPoints().size());
 }
 
 
@@ -114,32 +100,23 @@ unsigned char Nuke2TensorFlow::linear2srgb(float c)
 }
 
 
-void Nuke2TensorFlow::extractDataFromTensor(Tensor& tensor)
+void Nuke2TensorFlow::extractDataFromTFLite(float* in)
 {
-	auto et = tensor.flat_inner_dims<float, 3>();
-	
-	// this coefficient 1.1, and the coefficients below for expanding
-	// a facial bounding box were taken from PRNet's Python code,
-	// I've no idea whether they're empirical or have a precise meaning
-	float mult = (float)_resolution * 1.1;
-	float frac = mult / _pointTransform.get_m()(0, 0);
-
+	float frac = -1 / _pointTransform.get_m()(0, 0);
 	_pointTransform = inv(_pointTransform);
-	
-	parallel_for(size_t(0), _resolution, [&](size_t i) {
-	    for (int j = 0; j < _resolution; j++) {
-		float x = et(i, j, 0) * mult;
-		float y = et(i, j, 1) * mult;
-		float z = et(i, j, 2) * frac;
+
+	parallel_for(size_t(0), data.defaultPoints().size(), [&](size_t i) {
+		int flatI = i * 3;
+		float x = in[flatI];
+		float y = in[flatI + 1];
+		float z = (in[flatI + 2] - _resolution / 2) * frac;
 
 		vector<double, 2> v = {x, y};
 		v = _pointTransform({x, y});
-
 		x = v(0);
 		y = _planeHeight - 1 - v(1);
-		
-		_points.at(i * _resolution + j).set(x, y, z);
-	    }
+
+		_points.at(i).set(x, y, z);
 	});
 }
 
@@ -151,7 +128,6 @@ void Nuke2TensorFlow::plane2img(const DD::Image::ImagePlane& plane,
 	int x = ipBox.x(), t = ipBox.t(), r = ipBox.r(),
 	    y = ipBox.y(), h = ipBox.h(), w = ipBox.w();
 	_planeHeight = (float)h;
-	_planeWidth = (float)w;
 
 	img.set_size(h, w);
 
@@ -166,9 +142,9 @@ void Nuke2TensorFlow::plane2img(const DD::Image::ImagePlane& plane,
 }
 
 
-Tensor Nuke2TensorFlow::extractFaceTensor(const matrix<rgb_pixel>& inImg,
+bool Nuke2TensorFlow::extractFacePixels(const matrix<rgb_pixel>& inImg,
 					int l, int r, int t, int b,
-					bool detected)
+					bool detected, float* out)
 {
 	//std::cout << "Processing image data for TensorFlow...\n";
 	int c[2] = { r - (r - l) / 2, b - (b - t) / 2 };
@@ -195,37 +171,33 @@ Tensor Nuke2TensorFlow::extractFaceTensor(const matrix<rgb_pixel>& inImg,
 	transform_image(inImg, outImg,
 				interpolate_quadratic(), inv(_pointTransform));
 
-	return img2Tensor(outImg);
+	img2tflite(outImg, out);
+	return true;
 }
 
 
-Tensor Nuke2TensorFlow::img2Tensor(const matrix<rgb_pixel>& img)
+void Nuke2TensorFlow::img2tflite(const matrix<rgb_pixel>& img, float* out)
 {
-	Tensor tensor(DT_FLOAT, TensorShape({1, _resolution, _resolution, 3}));
-	auto tensorMapped = tensor.tensor<float, 4>();
-
 	parallel_for(size_t(0), _resolution, [&](size_t y) {
-	    for (int x = 0; x < _resolution; ++x) {
-		rgb_pixel p = img(y, x);
-		tensorMapped(0, y, x, 0) = (float)p.red / 255.;
-		tensorMapped(0, y, x, 1) = (float)p.green / 255.;
-		tensorMapped(0, y, x, 2) = (float)p.blue / 255.;
-	    }
+		for (int x = 0; x < _resolution; ++x) {
+			int flatI = (x * _resolution + y) * 3;
+			out[flatI] = (float)img(x, y).red / 255.;
+			out[flatI + 1] = (float)img(x, y).green / 255.;
+			out[flatI + 2] = (float)img(x, y).blue / 255.;
+		}
 	});
-	return tensor;
 }
 
 
-Tensor Nuke2TensorFlow::imagePlane2Tensor(const DD::Image::ImagePlane& plane,
+bool Nuke2TensorFlow::imagePlane2tflite(const DD::Image::ImagePlane& plane,
 					const DD::Image::Box& userBBox,
-					bool useDetector)
+					bool useDetector, float* out)
 {
 	matrix<rgb_pixel> img;
 	plane2img(plane, img);
 
 	if (useDetector) {
 		//std::cout << "Detecting faces...\n";
-
 		matrix<rgb_pixel> imgP(img);
 		pyramid_down<2> pyr;
 
@@ -234,25 +206,21 @@ Tensor Nuke2TensorFlow::imagePlane2Tensor(const DD::Image::ImagePlane& plane,
 			levels--;
 			pyramid_up(imgP, pyr);
 		}
-		//auto dets = data.net(imgP);
-		// HOG detector
 		auto dets = _detector(imgP);
 
 		if (dets.size() < 1) {
 			std::cout << "No faces found.\n";
-			return Tensor();
+			return false;
 		}
-		//auto detBBox = pyr.rect_down(dets.at(0).rect, _upsample);
-		// HOG detector
 		auto detBBox = pyr.rect_down(dets.at(0), _upsample);
 
-		return extractFaceTensor(img, detBBox.left(), detBBox.right(),
-				detBBox.top(), detBBox.bottom(), true);
+		return extractFacePixels(img, detBBox.left(), detBBox.right(),
+				detBBox.top(), detBBox.bottom(), true, out);
 	}
 	auto ipBBox = plane.bounds();
 
 	//std::cout << "Using the provided bounding box for inference.\n";
-	return extractFaceTensor(img, userBBox.x(), userBBox.r(),
+	return extractFacePixels(img, userBBox.x(), userBBox.r(),
 				ipBBox.h() - userBBox.t(),
-				ipBBox.h() - userBBox.y(), false);
+				ipBBox.h() - userBBox.y(), false, out);
 }
