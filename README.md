@@ -4,6 +4,8 @@ It is the [PRNet](https://github.com/YadiraF/PRNet) imported into the Nuke compo
 
 It creates a geometry of a face from a single image. I use C++ TensorFlow API for evaluating the model and Dlib for basic image processing for moving data back and forth between TensorFlow and Nuke.
 
+UPD: there's also the [branch](https://github.com/mishurov/facefit/tree/tflite) with TensorFlow Lite and the model from ARCore 1.7.0
+
 ### Notes on installation
 Download the pre-trained model from [here](https://drive.google.com/file/d/1UoE-XuW1SDLUjZmJPkIZ1MLxvQFgmTFH/view?usp=sharing) or [here](https://drive.google.com/open?id=1UoE-XuW1SDLUjZmJPkIZ1MLxvQFgmTFH). And put it into ```data/net-data/```.
 
